@@ -88,17 +88,23 @@ public class RDServiceManager {
         }
     }
 
-    public void onActivityResult(@NonNull int requestCode, @NonNull int resultCode, Intent data) {
-        // ERROR: Null data check missing in your version
-        if (data == null) {
-            mRDEvent.onRDServiceCaptureFailed(resultCode, null, "DATA_NULL");
+    /**
+     * Handles activity results. Results that do not belong to the RD service
+     * (for example Credopay's request code 100) are ignored.
+     */
+    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        // Ignore results that belong to other modules/SDKs
+        boolean isRdRequest =
+                requestCode == FACE_AUTH_RESPONSE
+                || requestCode == FINGERPRINT_SCANNER_CAPTURE
+                || mapRDDiscoverRC.containsKey(requestCode)
+                || mapRDCaptureRC.containsKey(requestCode);
+        if (!isRdRequest) {
             return;
         }
 
         if (requestCode == FACE_AUTH_RESPONSE) {
-            if (resultCode == RESULT_OK) {
-                // ERROR: data.getPackage() returns null often here
-                // onRDFaceCaptureIntentResponse(data, data.getPackage());
+            if (resultCode == RESULT_OK && data != null) {
                 onRDFaceCaptureIntentResponse(data, "FACE_SCANNER");
             } else {
                 mRDEvent.onRDServiceCaptureFailed(resultCode, data, "FACE_AUTH_FAILED");
@@ -107,24 +113,24 @@ public class RDServiceManager {
         }
 
         if (requestCode == FINGERPRINT_SCANNER_CAPTURE) {
-            if (resultCode == RESULT_OK) {
-                // ERROR: Same as above, package name might be null in intent response
-                // onRDServiceCaptureIntentResponse(data, data.getPackage());
+            if (resultCode == RESULT_OK && data != null) {
                 onRDServiceCaptureIntentResponse(data, "FINGERPRINT_SCANNER");
             } else {
                 mRDEvent.onRDServiceCaptureFailed(resultCode, data, "CAPTURE_FAILED");
             }
             return;
-        } else if (mapRDDiscoverRC.containsKey(requestCode)) {
+        }
+
+        if (mapRDDiscoverRC.containsKey(requestCode)) {
             String rdservice_pkg_name = mapRDDiscoverRC.get(requestCode);
-            if (resultCode == RESULT_OK) {
+            if (resultCode == RESULT_OK && data != null) {
                 onRDServiceInfoResponse(data, rdservice_pkg_name);
             } else {
                 mRDEvent.onRDServiceDriverDiscoveryFailed(resultCode, data, rdservice_pkg_name, "Discovery Failed");
             }
         } else if (mapRDCaptureRC.containsKey(requestCode)) {
             String rdservice_pkg_name = mapRDCaptureRC.get(requestCode);
-            if (resultCode == RESULT_OK) {
+            if (resultCode == RESULT_OK && data != null) {
                 onRDServiceCaptureIntentResponse(data, rdservice_pkg_name);
             } else {
                 mRDEvent.onRDServiceCaptureFailed(resultCode, data, rdservice_pkg_name);
@@ -133,6 +139,9 @@ public class RDServiceManager {
     }
 
     private boolean isDeviceDriverFound(String packageName, Activity activity) {
+        if (activity == null || packageName == null) {
+            return false;
+        }
         Intent intentServiceList = new Intent("in.gov.uidai.rdservice.fp.INFO");
         List<ResolveInfo> resolveInfoList = activity.getPackageManager().queryIntentActivities(intentServiceList, 0);
         if (resolveInfoList.isEmpty()) {
@@ -154,12 +163,7 @@ public class RDServiceManager {
         if (isDeviceDriverFound(packageName, activity)) {
             Intent intentCapture = new Intent("in.gov.uidai.rdservice.fp.CAPTURE");
             intentCapture.setPackage(packageName);
-            
-            // ERROR: Spelling was "PID_OPTONS" (T missing)
-            // intentCapture.putExtra("PID_OPTONS", pid_options);
-            // CORRECTED:
             intentCapture.putExtra("PID_OPTIONS", pid_options);
-            
             activity.startActivityForResult(intentCapture, FINGERPRINT_SCANNER_CAPTURE);
         } else {
             mRDEvent.onDeviceDriverFound(false);
@@ -168,11 +172,8 @@ public class RDServiceManager {
 
     public void openFaceAuth(String transactionId, Activity activity) {
         try {
-            // ERROR: Was using "in.gov.uiadai..." (Extra 'a')
-            // Intent intent = new Intent("in.gov.uiadai.rdservice.face.CAPTURE");
-            // CORRECTED:
             Intent intent = new Intent("in.gov.uidai.rdservice.face.CAPTURE");
-            
+
             intent.putExtra("request",
                     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
                     "<PidOptions ver=\"1.0\" env=\"P\">\n" +
@@ -228,12 +229,8 @@ public class RDServiceManager {
 
             Intent intentCapture = new Intent("in.gov.uidai.rdservice.fp.CAPTURE");
             intentCapture.setPackage(rd_service_package);
-            
-            // ERROR: Spelling was "PID_OPTONS"
-            // intentCapture.putExtra("PID_OPTONS", pid_options);
-            // CORRECTED:
             intentCapture.putExtra("PID_OPTIONS", pid_options);
-            
+
             activity.startActivityForResult(intentCapture, capture_rc);
         } else {
             mRDEvent.onRDServiceDriverDiscoveryFailed(0, null, rd_service_package, "Package not found");
@@ -244,6 +241,8 @@ public class RDServiceManager {
         Bundle b = data.getExtras();
         if (b != null) {
             mRDEvent.onRDServiceDriverDiscovery(b.getString("RD_SERVICE_INFO", ""), rd_service_package, mapRDDriverWhitelist.containsKey(rd_service_package));
+        } else {
+            mRDEvent.onRDServiceDriverDiscoveryFailed(0, data, rd_service_package, "Empty response");
         }
     }
 
@@ -251,22 +250,26 @@ public class RDServiceManager {
         Bundle b = data.getExtras();
         if (b != null) {
             mRDEvent.onRDServiceCaptureResponse(b.getString("PID_DATA", ""), rd_service_package);
+        } else {
+            mRDEvent.onRDServiceCaptureFailed(0, data, rd_service_package);
         }
     }
 
     private void onRDFaceCaptureIntentResponse(@NonNull Intent data, @NonNull String rd_service_package) {
-        // Face auth uses "response" key, not "PID_DATA"
+        // Face auth uses the "response" key, not "PID_DATA"
         String response = data.getStringExtra("response");
         if (response != null) {
             mRDEvent.onRDServiceCaptureResponse(response, rd_service_package);
+        } else {
+            mRDEvent.onRDServiceCaptureFailed(0, data, rd_service_package);
         }
     }
 
-    private int getRDServiceDiscoverRC(@NonNull int index) {
+    private int getRDServiceDiscoverRC(int index) {
         return RC_RDSERVICE_DISCOVER_START_INDEX + index;
     }
 
-    private int getRDServiceCaptureRC(@NonNull int index) {
+    private int getRDServiceCaptureRC(int index) {
         return RC_RDSERVICE_CAPTURE_START_INDEX + index;
     }
 }
